@@ -6,35 +6,56 @@ import android.content.Context
  * Main Android BLE controller for SmartAttend.
  *
  * Responsibilities:
- * - Start/stop teacher session broadcasting
- * - Start/stop student scanning
- * - Start/stop student cryptographic ID broadcasting
- * - Receive detected session IDs and RSSI
  *
- * BLE implementation is delegated to:
- * - AndroidBleAdvertiser
- * - AndroidBleScanner
+ * Teacher:
+ * - Broadcast Session ID
+ * - Scan Student Cryptographic Keys
+ *
+ * Student:
+ * - Broadcast Cryptographic Key
+ *
+ * BLE is responsible only for communication.
+ * Database validation and attendance processing
+ * are handled by the application/backend layer.
  */
 class AndroidBleManager(
     private val context: Context
 ) {
 
+    /*
+     * Teacher Session ID advertiser.
+     */
     private val advertiser =
         AndroidBleAdvertiser(context)
 
+    /*
+     * Teacher scanner for student
+     * cryptographic keys.
+     */
     private val scanner =
         AndroidBleScanner(context)
 
+    /*
+     * Student cryptographic key advertiser.
+     */
+    private val studentKeyAdvertiser =
+        AndroidStudentKeyAdvertiser(context)
+
+    /*
+     * Currently active teacher session.
+     */
     private var currentSessionId: String? = null
 
     /**
-     * ================================
-     * TEACHER BROADCAST
-     * ================================
+     * ---------------------------------------------------------
+     * TEACHER - SESSION BROADCAST
+     * ---------------------------------------------------------
      *
-     * Teacher broadcasts the Session ID.
+     * Start broadcasting the teacher's
+     * current Session ID.
      *
      * Example:
+     *
      * BCS701
      */
     fun startTeacherBroadcast(
@@ -42,34 +63,41 @@ class AndroidBleManager(
     ) {
 
         if (sessionId.isBlank()) {
+
             println(
-                "SmartAttend BLE: Session ID is empty"
+                "SmartAttend BLE: " +
+                        "Session ID is empty"
             )
+
             return
         }
 
-        currentSessionId = sessionId
+        currentSessionId =
+            sessionId.trim()
 
         println(
-            "SmartAttend BLE: Starting teacher broadcast"
+            "SmartAttend BLE: " +
+                    "Starting teacher broadcast"
         )
 
         println(
-            "SmartAttend BLE: Session ID = $sessionId"
+            "SmartAttend BLE: " +
+                    "Session ID = $currentSessionId"
         )
 
         advertiser.startAdvertising(
-            sessionId
+            currentSessionId!!
         )
     }
 
     /**
-     * Stop Teacher BLE broadcasting.
+     * Stop Teacher Session ID broadcasting.
      */
     fun stopTeacherBroadcast() {
 
         println(
-            "SmartAttend BLE: Stopping teacher broadcast"
+            "SmartAttend BLE: " +
+                    "Stopping teacher broadcast"
         )
 
         advertiser.stopAdvertising()
@@ -78,126 +106,162 @@ class AndroidBleManager(
     }
 
     /**
-     * ================================
-     * STUDENT SCANNING
-     * ================================
+     * ---------------------------------------------------------
+     * TEACHER - STUDENT KEY SCANNING
+     * ---------------------------------------------------------
      *
-     * Student searches for the teacher's
-     * SmartAttend BLE session.
+     * Start scanning for student
+     * cryptographic key advertisements.
      *
-     * Returns:
-     * - Session ID
-     * - RSSI
+     * Every NEW student key detected by BLE
+     * is passed to this callback.
+     *
+     * The application/backend layer can then
+     * send the key to the backend for validation.
+     *
+     * BLE does NOT:
+     * - access the database
+     * - validate the key
+     * - mark attendance
      */
-    fun startStudentScanning(
-        onSessionDetected: (String, Int) -> Unit
+    fun startTeacherScanning(
+        onStudentKeyDetected: (String) -> Unit
     ) {
 
         println(
-            "SmartAttend BLE: Starting student scanning"
+            "SmartAttend BLE: " +
+                    "Starting teacher scanning"
         )
 
-        scanner.startScanning { sessionId, rssi ->
+        scanner.startScanning { key ->
 
             println(
                 "SmartAttend BLE: " +
-                        "Session detected = $sessionId"
+                        "Student key received = $key"
             )
 
-            println(
-                "SmartAttend BLE: " +
-                        "RSSI = $rssi dBm"
-            )
-
-            currentSessionId = sessionId
-
-            onSessionDetected(
-                sessionId,
-                rssi
+            /*
+             * Pass ONLY the cryptographic key
+             * to the application/backend layer.
+             *
+             * BLE processing ends here.
+             */
+            onStudentKeyDetected(
+                key
             )
         }
     }
 
     /**
-     * Stop Student BLE scanning.
+     * Stop Teacher scanning for
+     * student cryptographic keys.
      */
-    fun stopStudentScanning() {
+    fun stopTeacherScanning() {
 
         println(
-            "SmartAttend BLE: Stopping student scanning"
+            "SmartAttend BLE: " +
+                    "Stopping teacher scanning"
         )
 
         scanner.stopScanning()
-
-        currentSessionId = null
     }
 
     /**
-     * ================================
-     * STUDENT BROADCAST
-     * ================================
+     * ---------------------------------------------------------
+     * STUDENT - KEY BROADCAST
+     * ---------------------------------------------------------
      *
-     * Student broadcasts only the
-     * cryptographic ID.
+     * Start broadcasting the student's
+     * cryptographic key.
+     *
+     * Example:
+     *
+     * 081CS23
      */
     fun startStudentBroadcast(
-        cryptographicId: String
+        cryptographicKey: String
     ) {
 
-        if (cryptographicId.isBlank()) {
+        if (cryptographicKey.isBlank()) {
+
             println(
-                "SmartAttend BLE: Cryptographic ID is empty"
+                "SmartAttend BLE: " +
+                        "Cryptographic key is empty"
             )
+
             return
         }
 
+        val key =
+            cryptographicKey.trim()
+
         println(
-            "SmartAttend BLE: Starting student broadcast"
+            "SmartAttend BLE: " +
+                    "Starting student key broadcast"
         )
 
         println(
-            "SmartAttend BLE: Cryptographic ID = $cryptographicId"
+            "SmartAttend BLE: " +
+                    "Student key = $key"
         )
 
-        advertiser.startAdvertising(
-            cryptographicId
+        studentKeyAdvertiser.startAdvertising(
+            key
         )
     }
 
     /**
-     * Stop Student BLE broadcasting.
+     * Stop Student cryptographic
+     * key broadcasting.
      */
     fun stopStudentBroadcast() {
 
         println(
-            "SmartAttend BLE: Stopping student broadcast"
+            "SmartAttend BLE: " +
+                    "Stopping student key broadcast"
         )
 
-        advertiser.stopAdvertising()
+        studentKeyAdvertiser.stopAdvertising()
     }
 
     /**
-     * Get the currently detected/active
-     * session ID.
-     */
-    fun getCurrentSessionId(): String? {
-        return currentSessionId
-    }
-
-    /**
-     * ================================
-     * STOP EVERYTHING
-     * ================================
+     * ---------------------------------------------------------
+     * STOP ALL BLE OPERATIONS
+     * ---------------------------------------------------------
+     *
+     * Stops:
+     *
+     * - Teacher Session ID advertising
+     * - Teacher student-key scanning
+     * - Student cryptographic-key advertising
      */
     fun stopAll() {
 
+        println(
+            "SmartAttend BLE: " +
+                    "Stopping all BLE operations"
+        )
+
         advertiser.stopAdvertising()
+
         scanner.stopScanning()
+
+        studentKeyAdvertiser.stopAdvertising()
 
         currentSessionId = null
 
         println(
-            "SmartAttend BLE: All BLE operations stopped"
+            "SmartAttend BLE: " +
+                    "All BLE operations stopped"
         )
+    }
+
+    /**
+     * Get the currently active
+     * teacher Session ID.
+     */
+    fun getCurrentSessionId(): String? {
+
+        return currentSessionId
     }
 }

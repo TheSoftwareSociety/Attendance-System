@@ -30,32 +30,65 @@ class AndroidBleScanner(
 
     private var isScanning = false
 
-    private var onSessionDetected:
-            ((String, Int) -> Unit)? = null
+    /*
+     * Callback used to pass a detected
+     * student cryptographic key to the
+     * application/backend layer.
+     */
+    private var onStudentKeyDetected:
+            ((String) -> Unit)? = null
+
+    /*
+     * Stores keys already detected during
+     * the current scanning session.
+     *
+     * This prevents the same student's
+     * advertisement from triggering the
+     * backend repeatedly.
+     */
+    private val detectedStudentKeys =
+        mutableSetOf<String>()
 
     /**
-     * Start scanning for SmartAttend BLE.
+     * Student Cryptographic Key BLE Service UUID.
      *
-     * Returns:
+     * This MUST be the same UUID used by
+     * AndroidStudentKeyAdvertiser.
+     */
+    private val studentKeyServiceUuid =
+        ParcelUuid(
+            AndroidStudentKeyAdvertiser.STUDENT_KEY_SERVICE_UUID
+        )
+
+    /**
+     * Start scanning for student
+     * cryptographic key advertisements.
      *
-     * Session ID
-     * RSSI
+     * The callback returns ONLY:
+     *
+     * cryptographicKey
      */
     @SuppressLint("MissingPermission")
     fun startScanning(
-        onSessionDetected: (String, Int) -> Unit
+        onStudentKeyDetected: (String) -> Unit
     ) {
 
+        /*
+         * Prevent starting multiple
+         * scanners at the same time.
+         */
         if (isScanning) {
 
             println(
-                "SmartAttend BLE: " +
-                        "Already scanning"
+                "SmartAttend BLE: Already scanning"
             )
 
             return
         }
 
+        /*
+         * Check Bluetooth scan permission.
+         */
         if (!hasScanPermission()) {
 
             println(
@@ -66,6 +99,9 @@ class AndroidBleScanner(
             return
         }
 
+        /*
+         * Get Bluetooth adapter.
+         */
         val adapter = bluetoothAdapter
 
         if (adapter == null) {
@@ -78,6 +114,9 @@ class AndroidBleScanner(
             return
         }
 
+        /*
+         * Bluetooth must be enabled.
+         */
         if (!adapter.isEnabled) {
 
             println(
@@ -88,6 +127,9 @@ class AndroidBleScanner(
             return
         }
 
+        /*
+         * Get BLE scanner.
+         */
         val scanner = bluetoothLeScanner
 
         if (scanner == null) {
@@ -100,9 +142,28 @@ class AndroidBleScanner(
             return
         }
 
-        this.onSessionDetected =
-            onSessionDetected
+        /*
+         * Store application callback.
+         */
+        this.onStudentKeyDetected =
+            onStudentKeyDetected
 
+        /*
+         * Start a fresh detection session.
+         *
+         * Keys detected during a previous
+         * scan are allowed again.
+         */
+        detectedStudentKeys.clear()
+
+        /*
+         * Configure BLE scanning.
+         *
+         * LOW_LATENCY is useful for the
+         * attendance prototype because we
+         * want student advertisements
+         * to be detected quickly.
+         */
         val scanSettings =
             ScanSettings.Builder()
                 .setScanMode(
@@ -112,9 +173,16 @@ class AndroidBleScanner(
 
         println(
             "SmartAttend BLE: " +
-                    "Starting scanner"
+                    "Starting student key scanner"
         )
 
+        /*
+         * Start BLE scan.
+         *
+         * We intentionally scan broadly and
+         * perform SmartAttend UUID filtering
+         * inside processScanResult().
+         */
         scanner.startScan(
             null,
             scanSettings,
@@ -125,7 +193,7 @@ class AndroidBleScanner(
 
         println(
             "SmartAttend BLE: " +
-                    "Scanner STARTED"
+                    "Student scanner STARTED"
         )
     }
 
@@ -157,11 +225,22 @@ class AndroidBleScanner(
         }
 
         isScanning = false
-        onSessionDetected = null
+
+        /*
+         * Remove callback so that no more
+         * keys are delivered to the
+         * application layer.
+         */
+        onStudentKeyDetected = null
+
+        /*
+         * Clear detected keys.
+         */
+        detectedStudentKeys.clear()
 
         println(
             "SmartAttend BLE: " +
-                    "Scanner STOPPED"
+                    "Student scanner STOPPED"
         )
     }
 
@@ -185,7 +264,7 @@ class AndroidBleScanner(
 
                 println(
                     "SmartAttend BLE: " +
-                            "Scan FAILED"
+                            "Student scan FAILED"
                 )
 
                 println(
@@ -198,51 +277,56 @@ class AndroidBleScanner(
         }
 
     /**
-     * Process discovered BLE packet.
+     * Process a discovered BLE advertisement.
      */
     private fun processScanResult(
         result: ScanResult
     ) {
 
+        /*
+         * A scan record is required
+         * to inspect the advertisement.
+         */
         val scanRecord =
             result.scanRecord
                 ?: return
 
         /*
-         * Check whether the SmartAttend
-         * Service UUID exists.
+         * Check whether the advertisement
+         * contains the SmartAttend Student
+         * Key Service UUID.
          */
         val serviceUuids =
             scanRecord.serviceUuids
 
-        val smartAttendUuid =
-            ParcelUuid(
-                AndroidBleAdvertiser.SERVICE_UUID
-            )
-
         if (
             serviceUuids == null ||
             !serviceUuids.contains(
-                smartAttendUuid
+                studentKeyServiceUuid
             )
         ) {
 
+            /*
+             * Not a SmartAttend student
+             * advertisement.
+             */
             return
         }
 
         /*
-         * Read Session ID from Service Data.
-         *
-         * Example:
-         *
-         * BCS701
+         * Read Service Data associated
+         * with the Student Key Service UUID.
          */
         val serviceData =
             scanRecord.getServiceData(
-                smartAttendUuid
+                studentKeyServiceUuid
             ) ?: return
 
-        val sessionId =
+        /*
+         * Convert the service data into
+         * the student's cryptographic key.
+         */
+        val cryptographicKey =
             serviceData
                 .toString(Charsets.UTF_8)
                 .trim()
@@ -251,32 +335,53 @@ class AndroidBleScanner(
                 }
                 ?: return
 
-        val rssi =
-            result.rssi
+        /*
+         * Ignore the same key if it has
+         * already been detected during
+         * this scanning session.
+         */
+        if (
+            !detectedStudentKeys.add(
+                cryptographicKey
+            )
+        ) {
 
+            println(
+                "SmartAttend BLE: " +
+                        "Duplicate student key ignored = " +
+                        cryptographicKey
+            )
+
+            return
+        }
+
+        /*
+         * New student detected.
+         */
         println(
             "SmartAttend BLE: " +
-                    "SmartAttend packet received"
+                    "Student key received"
         )
 
         println(
             "SmartAttend BLE: " +
-                    "Session = $sessionId"
+                    "Key = $cryptographicKey"
         )
 
-        println(
-            "SmartAttend BLE: " +
-                    "RSSI = $rssi dBm"
-        )
-
-        onSessionDetected?.invoke(
-            sessionId,
-            rssi
+        /*
+         * Pass ONLY the cryptographic key
+         * to the application/backend layer.
+         *
+         * BLE processing ends here.
+         */
+        onStudentKeyDetected?.invoke(
+            cryptographicKey
         )
     }
 
     /**
-     * Check BLE scan permission.
+     * Check whether BLE scan permission
+     * has been granted.
      */
     private fun hasScanPermission(): Boolean {
 

@@ -2,7 +2,7 @@ package com.smartattend.ble
 
 import android.Manifest
 import android.app.Activity
-import android.content.pm.PackageManager
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -12,14 +12,16 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 
 @Composable
 fun AndroidBleTestScreen() {
@@ -28,59 +30,133 @@ fun AndroidBleTestScreen() {
 
     val activity = context as? Activity
 
+    /*
+     * Main BLE manager.
+     *
+     * Teacher:
+     * - Broadcast Session ID
+     * - Scan Student Cryptographic Keys
+     *
+     * Student:
+     * - Broadcast Cryptographic Key
+     */
     val bleManager = remember {
         AndroidBleManager(context)
     }
 
+    /*
+     * Student cryptographic key advertiser.
+     */
+    val studentKeyAdvertiser = remember {
+        AndroidStudentKeyAdvertiser(context)
+    }
+
+    /*
+     * --------------------------------
+     * TEACHER SESSION
+     * --------------------------------
+     */
+
     var sessionId by remember {
         mutableStateOf("BCS701")
-    }
-
-    var detectedSessionId by remember {
-        mutableStateOf<String?>(null)
-    }
-
-    var status by remember {
-        mutableStateOf("BLE Idle")
     }
 
     var isTeacherBroadcasting by remember {
         mutableStateOf(false)
     }
 
-    var isStudentScanning by remember {
+    var isTeacherScanning by remember {
         mutableStateOf(false)
     }
 
     /*
-     * Android 12+
-     *
-     * BLUETOOTH_SCAN
-     * BLUETOOTH_ADVERTISE
-     * BLUETOOTH_CONNECT
+     * --------------------------------
+     * STUDENT
+     * --------------------------------
      */
+
+    var cryptographicKey by remember {
+        mutableStateOf("081CS23")
+    }
+
+    var isStudentBroadcasting by remember {
+        mutableStateOf(false)
+    }
+
+    /*
+     * --------------------------------
+     * DETECTED STUDENTS
+     * --------------------------------
+     *
+     * A Set is used so that the same student
+     * does not appear repeatedly.
+     *
+     * BLE advertisements are received
+     * multiple times while broadcasting.
+     */
+    val detectedStudentKeys =
+        remember {
+            mutableStateListOf<String>()
+        }
+
+    /*
+     * --------------------------------
+     * STATUS
+     * --------------------------------
+     */
+
+    var status by remember {
+        mutableStateOf("BLE Idle")
+    }
+
+    /*
+     * --------------------------------
+     * PERMISSIONS
+     * --------------------------------
+     */
+
     val permissionLauncher =
         rememberLauncherForActivityResult(
             contract =
                 ActivityResultContracts.RequestMultiplePermissions()
         ) { permissions ->
 
-            val scanGranted =
-                permissions[Manifest.permission.BLUETOOTH_SCAN] == true
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
 
-            val advertiseGranted =
-                permissions[Manifest.permission.BLUETOOTH_ADVERTISE] == true
+                val scanGranted =
+                    permissions[
+                        Manifest.permission.BLUETOOTH_SCAN
+                    ] == true
 
-            val connectGranted =
-                permissions[Manifest.permission.BLUETOOTH_CONNECT] == true
+                val advertiseGranted =
+                    permissions[
+                        Manifest.permission.BLUETOOTH_ADVERTISE
+                    ] == true
 
-            if (scanGranted && advertiseGranted && connectGranted) {
+                val connectGranted =
+                    permissions[
+                        Manifest.permission.BLUETOOTH_CONNECT
+                    ] == true
 
-                status = "Bluetooth permissions granted"
+                if (
+                    scanGranted &&
+                    advertiseGranted &&
+                    connectGranted
+                ) {
+
+                    status =
+                        "Bluetooth permissions granted"
+
+                } else {
+
+                    status =
+                        "Bluetooth permissions denied"
+                }
 
             } else {
 
-                status = "Bluetooth permissions denied"
+                status =
+                    "Bluetooth permissions handled by Android"
             }
         }
 
@@ -89,9 +165,7 @@ fun AndroidBleTestScreen() {
      */
     fun requestBluetoothPermissions() {
 
-        if (android.os.Build.VERSION.SDK_INT >=
-            android.os.Build.VERSION_CODES.S
-        ) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
 
             permissionLauncher.launch(
                 arrayOf(
@@ -103,18 +177,23 @@ fun AndroidBleTestScreen() {
 
         } else {
 
-            status = "Bluetooth permissions handled by Android version"
+            status =
+                "Bluetooth permissions handled by Android"
         }
     }
 
     /*
-     * Teacher broadcast.
+     * --------------------------------
+     * TEACHER BROADCAST
+     * --------------------------------
      */
+
     fun startTeacher() {
 
         if (sessionId.isBlank()) {
 
-            status = "Enter a Session ID"
+            status =
+                "Enter a Session ID"
 
             return
         }
@@ -122,102 +201,209 @@ fun AndroidBleTestScreen() {
         requestBluetoothPermissions()
 
         bleManager.startTeacherBroadcast(
-            sessionId = sessionId.trim()
+            sessionId =
+                sessionId.trim()
         )
 
         isTeacherBroadcasting = true
-        status = "Teacher broadcasting: ${sessionId.trim()}"
+
+        status =
+            "Teacher broadcasting: ${sessionId.trim()}"
     }
 
-    /*
-     * Stop teacher broadcast.
-     */
     fun stopTeacher() {
 
         bleManager.stopTeacherBroadcast()
 
         isTeacherBroadcasting = false
 
-        status = "Teacher broadcast stopped"
+        status =
+            "Teacher broadcast stopped"
     }
 
     /*
-     * Student scanning.
+     * --------------------------------
+     * TEACHER SCANNING
+     * --------------------------------
+     *
+     * Teacher receives cryptographic
+     * keys from students.
      */
-    fun startStudent() {
+    fun startTeacherScanning() {
 
         requestBluetoothPermissions()
 
-        bleManager.startStudentScanning { detectedId, rssi ->
+        bleManager.startTeacherScanning { key ->
 
-            detectedSessionId = detectedId
+            /*
+             * Avoid duplicate keys.
+             */
+            if (
+                !detectedStudentKeys.contains(key)
+            ) {
 
-            status =
-                "Session detected: $detectedId\nRSSI: $rssi dBm"
+                detectedStudentKeys.add(key)
+
+                status =
+                    "Student detected: $key"
+            }
         }
 
-        isStudentScanning = true
+        isTeacherScanning = true
 
-        status = "Student scanning..."
+        status =
+            "Teacher scanning for students..."
+    }
+
+    fun stopTeacherScanning() {
+
+        bleManager.stopTeacherScanning()
+
+        isTeacherScanning = false
+
+        status =
+            "Teacher student scanning stopped"
     }
 
     /*
-     * Stop student scanning.
+     * Clear detected students.
      */
-    fun stopStudent() {
+    fun clearDetectedStudents() {
 
-        bleManager.stopStudentScanning()
+        detectedStudentKeys.clear()
 
-        isStudentScanning = false
-
-        status = "Student scanning stopped"
+        status =
+            "Detected student list cleared"
     }
 
     /*
-     * Stop BLE when screen/activity is destroyed.
+     * --------------------------------
+     * STUDENT BROADCAST
+     * --------------------------------
      */
+
+    fun startStudentBroadcast() {
+
+        if (cryptographicKey.isBlank()) {
+
+            status =
+                "Enter a Cryptographic Key"
+
+            return
+        }
+
+        requestBluetoothPermissions()
+
+        studentKeyAdvertiser.startAdvertising(
+            cryptographicKey =
+                cryptographicKey.trim()
+        )
+
+        isStudentBroadcasting = true
+
+        status =
+            "Student broadcasting key: ${cryptographicKey.trim()}"
+    }
+
+    fun stopStudentBroadcast() {
+
+        studentKeyAdvertiser.stopAdvertising()
+
+        isStudentBroadcasting = false
+
+        status =
+            "Student key broadcast stopped"
+    }
+
+    /*
+     * --------------------------------
+     * CLEANUP
+     * --------------------------------
+     */
+
     DisposableEffect(Unit) {
 
         onDispose {
 
             bleManager.stopAll()
+
+            studentKeyAdvertiser.stopAdvertising()
         }
     }
 
+    /*
+     * --------------------------------
+     * UI
+     * --------------------------------
+     */
+
     Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(24.dp),
+        modifier =
+            Modifier
+                .fillMaxSize()
+                .padding(24.dp),
 
         verticalArrangement =
             Arrangement.spacedBy(16.dp)
     ) {
 
-        Text(
-            text = "SmartAttend BLE Test",
-            style = MaterialTheme.typography.headlineMedium
-        )
+        /*
+         * TITLE
+         */
 
         Text(
-            text = "Status: $status",
-            style = MaterialTheme.typography.bodyLarge
-        )
+            text =
+                "SmartAttend BLE Test",
 
-        Spacer(
-            modifier = Modifier.height(8.dp)
+            style =
+                MaterialTheme.typography.headlineMedium
         )
 
         /*
-         * Session ID input.
+         * STATUS
          */
+
+        Text(
+            text =
+                "Status: $status",
+
+            style =
+                MaterialTheme.typography.bodyLarge
+        )
+
+        Spacer(
+            modifier =
+                Modifier.height(8.dp)
+        )
+
+        /*
+         * ==================================
+         * TEACHER
+         * ==================================
+         */
+
+        Text(
+            text =
+                "Teacher",
+
+            style =
+                MaterialTheme.typography.titleLarge
+        )
+
+        /*
+         * SESSION ID
+         */
+
         OutlinedTextField(
-            value = sessionId,
+            value =
+                sessionId,
 
             onValueChange = {
                 sessionId = it
             },
 
-            modifier = Modifier.fillMaxWidth(),
+            modifier =
+                Modifier.fillMaxWidth(),
 
             label = {
                 Text("Session ID")
@@ -225,29 +411,29 @@ fun AndroidBleTestScreen() {
 
             singleLine = true,
 
-            enabled = !isTeacherBroadcasting
+            enabled =
+                !isTeacherBroadcasting
         )
 
         /*
-         * Teacher section.
+         * TEACHER BROADCAST
          */
-        Text(
-            text = "Teacher",
-            style = MaterialTheme.typography.titleLarge
-        )
 
         Button(
             onClick = {
 
                 if (isTeacherBroadcasting) {
+
                     stopTeacher()
+
                 } else {
+
                     startTeacher()
                 }
-
             },
 
-            modifier = Modifier.fillMaxWidth()
+            modifier =
+                Modifier.fillMaxWidth()
         ) {
 
             Text(
@@ -259,29 +445,28 @@ fun AndroidBleTestScreen() {
         }
 
         /*
-         * Student section.
+         * TEACHER SCANNER
          */
-        Text(
-            text = "Student",
-            style = MaterialTheme.typography.titleLarge
-        )
 
         Button(
             onClick = {
 
-                if (isStudentScanning) {
-                    stopStudent()
-                } else {
-                    startStudent()
-                }
+                if (isTeacherScanning) {
 
+                    stopTeacherScanning()
+
+                } else {
+
+                    startTeacherScanning()
+                }
             },
 
-            modifier = Modifier.fillMaxWidth()
+            modifier =
+                Modifier.fillMaxWidth()
         ) {
 
             Text(
-                if (isStudentScanning)
+                if (isTeacherScanning)
                     "STOP STUDENT SCANNING"
                 else
                     "START STUDENT SCANNING"
@@ -289,18 +474,147 @@ fun AndroidBleTestScreen() {
         }
 
         /*
-         * Detected session.
+         * DETECTED STUDENTS
          */
-        detectedSessionId?.let { detectedId ->
+
+        Text(
+            text =
+                "Detected Students: ${detectedStudentKeys.size}",
+
+            style =
+                MaterialTheme.typography.titleMedium
+        )
+
+        if (detectedStudentKeys.isEmpty()) {
 
             Text(
-                text = "Detected Session ID:",
-                style = MaterialTheme.typography.titleMedium
+                text =
+                    "No students detected yet.",
+
+                style =
+                    MaterialTheme.typography.bodyMedium
             )
 
+        } else {
+
+            LazyColumn(
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .height(180.dp),
+
+                verticalArrangement =
+                    Arrangement.spacedBy(8.dp)
+            ) {
+
+                items(
+                    detectedStudentKeys
+                ) { key ->
+
+                    Text(
+                        text = "• $key",
+
+                        style =
+                            MaterialTheme.typography.bodyLarge
+                    )
+                }
+            }
+        }
+
+        /*
+         * CLEAR BUTTON
+         */
+
+        Button(
+            onClick = {
+                clearDetectedStudents()
+            },
+
+            modifier =
+                Modifier.fillMaxWidth()
+        ) {
+
             Text(
-                text = detectedId,
-                style = MaterialTheme.typography.headlineSmall
+                "CLEAR DETECTED STUDENTS"
+            )
+        }
+
+        Spacer(
+            modifier =
+                Modifier.height(8.dp)
+        )
+
+        /*
+         * ==================================
+         * STUDENT
+         * ==================================
+         *
+         * Kept here for prototype testing.
+         *
+         * In the actual application this
+         * section will be on the student's
+         * mobile application.
+         */
+
+        Text(
+            text =
+                "Student",
+
+            style =
+                MaterialTheme.typography.titleLarge
+        )
+
+        /*
+         * CRYPTOGRAPHIC KEY
+         */
+
+        OutlinedTextField(
+            value =
+                cryptographicKey,
+
+            onValueChange = {
+                cryptographicKey = it
+            },
+
+            modifier =
+                Modifier.fillMaxWidth(),
+
+            label = {
+                Text("Cryptographic Key")
+            },
+
+            singleLine = true,
+
+            enabled =
+                !isStudentBroadcasting
+        )
+
+        /*
+         * STUDENT BROADCAST
+         */
+
+        Button(
+            onClick = {
+
+                if (isStudentBroadcasting) {
+
+                    stopStudentBroadcast()
+
+                } else {
+
+                    startStudentBroadcast()
+                }
+            },
+
+            modifier =
+                Modifier.fillMaxWidth()
+        ) {
+
+            Text(
+                if (isStudentBroadcasting)
+                    "STOP STUDENT BROADCAST"
+                else
+                    "START STUDENT BROADCAST"
             )
         }
     }
