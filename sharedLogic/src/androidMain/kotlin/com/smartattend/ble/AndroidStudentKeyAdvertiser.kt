@@ -1,5 +1,6 @@
 package com.smartattend.ble
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
@@ -7,7 +8,10 @@ import android.bluetooth.le.AdvertiseCallback
 import android.bluetooth.le.AdvertiseData
 import android.bluetooth.le.AdvertiseSettings
 import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.ParcelUuid
+import java.nio.charset.StandardCharsets
 import java.util.UUID
 
 class AndroidStudentKeyAdvertiser(
@@ -17,7 +21,8 @@ class AndroidStudentKeyAdvertiser(
     companion object {
 
         /**
-         * Separate BLE service for student cryptographic keys.
+         * Separate BLE service for
+         * student cryptographic keys.
          */
         val STUDENT_KEY_SERVICE_UUID: UUID =
             UUID.fromString(
@@ -33,51 +38,118 @@ class AndroidStudentKeyAdvertiser(
     private val bluetoothAdapter: BluetoothAdapter?
         get() = bluetoothManager.adapter
 
+    private val advertiser
+        get() = bluetoothAdapter?.bluetoothLeAdvertiser
+
     private var isAdvertising = false
 
+    /**
+     * ---------------------------------------------------------
+     * ADVERTISE CALLBACK
+     * ---------------------------------------------------------
+     */
     private val advertiseCallback =
         object : AdvertiseCallback() {
 
             override fun onStartSuccess(
-                settingsInEffect: AdvertiseSettings
+                settingsInEffect: AdvertiseSettings?
             ) {
 
+                isAdvertising = true
+
                 println(
-                    "SmartAttend BLE: " +
-                            "Student key advertising STARTED"
+                    "================================================="
                 )
 
-                isAdvertising = true
+                println(
+                    "SmartAttend BLE DEBUG: " +
+                            "STUDENT ADVERTISING STARTED"
+                )
+
+                println(
+                    "SmartAttend BLE DEBUG: " +
+                            "Student Service UUID = " +
+                            STUDENT_KEY_SERVICE_UUID
+                )
+
+                println(
+                    "================================================="
+                )
             }
 
             override fun onStartFailure(
                 errorCode: Int
             ) {
 
+                isAdvertising = false
+
+                val error =
+                    when (errorCode) {
+
+                        ADVERTISE_FAILED_ALREADY_STARTED ->
+                            "ALREADY_STARTED"
+
+                        ADVERTISE_FAILED_DATA_TOO_LARGE ->
+                            "DATA_TOO_LARGE"
+
+                        ADVERTISE_FAILED_FEATURE_UNSUPPORTED ->
+                            "FEATURE_UNSUPPORTED"
+
+                        ADVERTISE_FAILED_INTERNAL_ERROR ->
+                            "INTERNAL_ERROR"
+
+                        ADVERTISE_FAILED_TOO_MANY_ADVERTISERS ->
+                            "TOO_MANY_ADVERTISERS"
+
+                        else ->
+                            "UNKNOWN_ERROR"
+                    }
+
                 println(
-                    "SmartAttend BLE: " +
-                            "Student key advertising FAILED"
+                    "================================================="
                 )
 
                 println(
-                    "SmartAttend BLE: " +
+                    "SmartAttend BLE DEBUG: " +
+                            "!!! STUDENT ADVERTISING FAILED !!!"
+                )
+
+                println(
+                    "SmartAttend BLE DEBUG: " +
                             "Error code = $errorCode"
                 )
 
-                isAdvertising = false
+                println(
+                    "SmartAttend BLE DEBUG: " +
+                            "Error = $error"
+                )
+
+                println(
+                    "================================================="
+                )
             }
         }
 
+    /**
+     * ---------------------------------------------------------
+     * START STUDENT ADVERTISING
+     * ---------------------------------------------------------
+     */
     @SuppressLint("MissingPermission")
     fun startAdvertising(
         cryptographicKey: String
     ) {
 
-        if (isAdvertising) {
+        println(
+            "SmartAttend BLE DEBUG: " +
+                    "Starting student advertising"
+        )
+
+        if (!hasAdvertisePermission()) {
 
             println(
-                "SmartAttend BLE: " +
-                        "Student key already advertising"
+                "SmartAttend BLE DEBUG: " +
+                        "BLUETOOTH_ADVERTISE permission missing"
             )
 
             return
@@ -86,20 +158,21 @@ class AndroidStudentKeyAdvertiser(
         if (cryptographicKey.isBlank()) {
 
             println(
-                "SmartAttend BLE: " +
-                        "Cryptographic key is empty"
+                "SmartAttend BLE DEBUG: " +
+                        "Student key is empty"
             )
 
             return
         }
 
-        val adapter = bluetoothAdapter
+        val adapter =
+            bluetoothAdapter
 
         if (adapter == null) {
 
             println(
-                "SmartAttend BLE: " +
-                        "Bluetooth unavailable"
+                "SmartAttend BLE DEBUG: " +
+                        "Bluetooth adapter unavailable"
             )
 
             return
@@ -108,36 +181,83 @@ class AndroidStudentKeyAdvertiser(
         if (!adapter.isEnabled) {
 
             println(
-                "SmartAttend BLE: " +
+                "SmartAttend BLE DEBUG: " +
                         "Bluetooth disabled"
             )
 
             return
         }
 
-        if (!adapter.isMultipleAdvertisementSupported) {
+        val bleAdvertiser =
+            advertiser
+
+        if (bleAdvertiser == null) {
 
             println(
-                "SmartAttend BLE: " +
-                        "BLE advertising not supported"
-            )
-
-            return
-        }
-
-        val advertiser =
-            adapter.bluetoothLeAdvertiser
-
-        if (advertiser == null) {
-
-            println(
-                "SmartAttend BLE: " +
+                "SmartAttend BLE DEBUG: " +
                         "BLE advertiser unavailable"
             )
 
             return
         }
 
+        /*
+         * Stop an existing advertisement.
+         */
+        if (isAdvertising) {
+
+            stopAdvertising()
+        }
+
+        /*
+         * -----------------------------------------------------
+         * MAIN ADVERTISEMENT
+         * -----------------------------------------------------
+         *
+         * Contains ONLY the Student Service UUID.
+         */
+        val advertiseData =
+            AdvertiseData.Builder()
+                .addServiceUuid(
+                    ParcelUuid(
+                        STUDENT_KEY_SERVICE_UUID
+                    )
+                )
+                .setIncludeDeviceName(false)
+                .setIncludeTxPowerLevel(false)
+                .build()
+
+        /*
+         * -----------------------------------------------------
+         * SCAN RESPONSE
+         * -----------------------------------------------------
+         *
+         * Contains the actual student key.
+         */
+        val keyData =
+            cryptographicKey
+                .trim()
+                .toByteArray(
+                    StandardCharsets.UTF_8
+                )
+
+        val scanResponse =
+            AdvertiseData.Builder()
+                .addServiceData(
+                    ParcelUuid(
+                        STUDENT_KEY_SERVICE_UUID
+                    ),
+                    keyData
+                )
+                .setIncludeDeviceName(false)
+                .setIncludeTxPowerLevel(false)
+                .build()
+
+        /*
+         * -----------------------------------------------------
+         * ADVERTISING SETTINGS
+         * -----------------------------------------------------
+         */
         val settings =
             AdvertiseSettings.Builder()
                 .setAdvertiseMode(
@@ -149,73 +269,106 @@ class AndroidStudentKeyAdvertiser(
                 .setConnectable(false)
                 .build()
 
-        /**
-         * The actual service data contains ONLY
-         * the student's cryptographic key.
-         */
-        val serviceData =
-            cryptographicKey.toByteArray(
-                Charsets.UTF_8
+        println(
+            "SmartAttend BLE DEBUG: " +
+                    "Student key = $cryptographicKey"
+        )
+
+        println(
+            "SmartAttend BLE DEBUG: " +
+                    "Student key bytes = ${keyData.size}"
+        )
+
+        println(
+            "SmartAttend BLE DEBUG: " +
+                    "Student UUID = " +
+                    STUDENT_KEY_SERVICE_UUID
+        )
+
+        try {
+
+            bleAdvertiser.startAdvertising(
+                settings,
+                advertiseData,
+                scanResponse,
+                advertiseCallback
             )
 
-        val advertiseData =
-            AdvertiseData.Builder()
-                .addServiceData(
-                    ParcelUuid(
-                        STUDENT_KEY_SERVICE_UUID
-                    ),
-                    serviceData
-                )
-                .setIncludeDeviceName(false)
-                .setIncludeTxPowerLevel(false)
-                .build()
+        } catch (e: SecurityException) {
 
-        println(
-            "SmartAttend BLE: " +
-                    "Starting student key advertising"
-        )
+            println(
+                "SmartAttend BLE DEBUG: " +
+                        "SecurityException starting student advertising"
+            )
 
-        println(
-            "SmartAttend BLE: " +
-                    "Key = $cryptographicKey"
-        )
+            println(
+                "SmartAttend BLE DEBUG: " +
+                        "Message = ${e.message}"
+            )
 
-        advertiser.startAdvertising(
-            settings,
-            advertiseData,
-            advertiseCallback
-        )
+        } catch (e: Exception) {
+
+            println(
+                "SmartAttend BLE DEBUG: " +
+                        "Exception starting student advertising"
+            )
+
+            println(
+                "SmartAttend BLE DEBUG: " +
+                        "Message = ${e.message}"
+            )
+        }
     }
 
+    /**
+     * ---------------------------------------------------------
+     * STOP STUDENT ADVERTISING
+     * ---------------------------------------------------------
+     */
     @SuppressLint("MissingPermission")
     fun stopAdvertising() {
 
-        val advertiser =
-            bluetoothAdapter
-                ?.bluetoothLeAdvertiser
+        try {
 
-        if (advertiser != null) {
+            advertiser?.stopAdvertising(
+                advertiseCallback
+            )
 
-            try {
+        } catch (e: SecurityException) {
 
-                advertiser.stopAdvertising(
-                    advertiseCallback
-                )
-
-            } catch (e: SecurityException) {
-
-                println(
-                    "SmartAttend BLE: " +
-                            "Unable to stop student advertising"
-                )
-            }
+            println(
+                "SmartAttend BLE DEBUG: " +
+                        "SecurityException stopping student advertising"
+            )
         }
 
         isAdvertising = false
 
         println(
-            "SmartAttend BLE: " +
-                    "Student key advertising STOPPED"
+            "SmartAttend BLE DEBUG: " +
+                    "Student advertising STOPPED"
         )
+    }
+
+    /**
+     * ---------------------------------------------------------
+     * PERMISSION
+     * ---------------------------------------------------------
+     */
+    private fun hasAdvertisePermission(): Boolean {
+
+        return if (
+            Build.VERSION.SDK_INT >=
+            Build.VERSION_CODES.S
+        ) {
+
+            context.checkSelfPermission(
+                Manifest.permission.BLUETOOTH_ADVERTISE
+            ) == PackageManager.PERMISSION_GRANTED
+
+        } else {
+
+            true
+        }
     }
 }
